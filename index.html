@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BLACK BERRY </title>
+<title>RAGE ZONE</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
@@ -31,6 +31,25 @@ canvas{position:fixed;inset:0;width:100%!important;height:100%!important;display
 #cry-txt.on{display:block}
 @keyframes cp{0%,100%{opacity:.5}50%{opacity:1}}
 #slap-badge{position:fixed;top:20px;right:28px;font-size:clamp(12px,1.8vw,18px);color:#440000;letter-spacing:4px;z-index:100;pointer-events:none}
+
+/* Model size slider */
+#size-wrap{
+  position:fixed;bottom:70px;right:28px;z-index:100;
+  display:none;flex-direction:column;align-items:flex-end;gap:4px;
+}
+#size-wrap.visible{display:flex}
+#size-lbl{font-size:10px;color:#330000;letter-spacing:3px;pointer-events:none}
+#size-slider{
+  -webkit-appearance:none;appearance:none;
+  width:140px;height:4px;background:#1a0000;
+  border:1px solid #330000;border-radius:2px;outline:none;cursor:pointer;
+}
+#size-slider::-webkit-slider-thumb{
+  -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+  background:#cc0000;border:1px solid #ff0000;cursor:pointer;
+  box-shadow:0 0 8px #ff000066;
+}
+#size-val{font-size:10px;color:#550000;letter-spacing:2px;pointer-events:none}
 
 /* Secret input box */
 #secret-wrap{
@@ -70,12 +89,12 @@ canvas{position:fixed;inset:0;width:100%!important;height:100%!important;display
 <body>
 
 <div id="loading">
-  <div id="loading-title">BLACK BERRY </div>
+  <div id="loading-title">RAGE ZONE</div>
   <div id="loading-bar-bg"><div id="loading-bar"></div></div>
   <div id="loading-txt">LOADING...</div>
 </div>
 
-<div id="title">BLACK BERRY </div>
+<div id="title">RAGE ZONE</div>
 <div id="slap-badge">SLAPS: <span id="slap-count">0</span></div>
 <div id="switch-banner" id="switch-banner">✦ REAL MODEL UNLOCKED ✦</div>
 <div id="flash"></div>
@@ -96,8 +115,13 @@ canvas{position:fixed;inset:0;width:100%!important;height:100%!important;display
   <input id="secret-input" type="password" placeholder="••••••••••" maxlength="30" autocomplete="off" spellcheck="false"/>
 </div>
 
+<div id="size-wrap">
+  <div id="size-lbl">MODEL SIZE</div>
+  <input id="size-slider" type="range" min="0.5" max="3.0" step="0.05" value="1.0"/>
+  <div id="size-val">1.00×</div>
+</div>
 <div id="cry-wrap"></div>
-<div id="cry-txt">SHE'S CRYING...Time for more punishment</div>
+<div id="cry-txt">SHE'S CRYING...</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -479,50 +503,59 @@ const _POSE_BONES = ['Head','Neck','Spine2','LeftShoulder','RightShoulder',
                      'LeftLeg','RightLeg','LeftFoot','RightFoot'];
 
 function _captureAvaturnPose() {
-  // Walk ALL bones and snapshot their current rotation (true bind pose)
   if (!activeModel) return;
+  // Force matrix update so quaternions reflect the true bind pose
+  activeModel.updateMatrixWorld(true);
+  // Snapshot every bone's quaternion (more reliable than Euler for skinned models)
   activeModel.traverse(obj => {
-    if (obj.isBone || obj.isSkinnedMesh || _POSE_BONES.includes(obj.name)) {
-      obj.userData.origRX = obj.rotation.x;
-      obj.userData.origRY = obj.rotation.y;
-      obj.userData.origRZ = obj.rotation.z;
+    if (obj.isBone || _POSE_BONES.includes(obj.name)) {
+      obj.userData.origQ = obj.quaternion.clone();
     }
-  });
-  // Re-snapshot the specific named bones into the maps too
-  if (bonShL) { bonShL.userData.origRX = bonShL.rotation.x; bonShL.userData.origRY = bonShL.rotation.y; bonShL.userData.origRZ = bonShL.rotation.z; }
-  if (bonShR) { bonShR.userData.origRX = bonShR.rotation.x; bonShR.userData.origRY = bonShR.rotation.y; bonShR.userData.origRZ = bonShR.rotation.z; }
-  Object.values(bonArmMap).forEach(b => {
-    b.userData.origRX = b.rotation.x;
-    b.userData.origRY = b.rotation.y;
-    b.userData.origRZ = b.rotation.z;
   });
   _avaturnPoseCaptured = true;
 }
 
+// Temp quaternion for shoulder wobble
+const _tmpQ = new THREE.Quaternion();
+const _wobbleQ = new THREE.Quaternion();
+const _shWobbleAxis = new THREE.Vector3(0, 0, 1);
+
 function applyPhysicsToAvaturn() {
-  // Snapshot the real bind-pose rotations on the very first frame after model loads
+  // Snapshot real bind-pose quaternions on first frame (after updateMatrixWorld)
   if (!_avaturnPoseCaptured) { _captureAvaturnPose(); return; }
 
-  if (bonHead) { bonHead.rotation.y = ph.hRY * 1.2; bonHead.rotation.z = ph.hRZ * 0.9 + Math.sin(breathT * .35) * .006; bonHead.rotation.x = ph.hRX * 0.8; }
-  if (bonNeck) { bonNeck.rotation.z = ph.nZ * 0.35; bonNeck.rotation.y = ph.hRY * 0.25; }
-  if (bonSpine2) { bonSpine2.rotation.z = ph.bRZ * 0.5 + Math.sin(breathT) * 0.008; bonSpine2.rotation.x = ph.bRX * 0.4; }
+  // Head & neck — use Euler deltas on top of bind pose
+  if (bonHead && bonHead.userData.origQ) {
+    bonHead.quaternion.copy(bonHead.userData.origQ);
+    _tmpQ.setFromEuler(new THREE.Euler(ph.hRX * 0.8, ph.hRY * 1.2, ph.hRZ * 0.9 + Math.sin(breathT*.35)*.006, 'XYZ'));
+    bonHead.quaternion.multiply(_tmpQ);
+  }
+  if (bonNeck && bonNeck.userData.origQ) {
+    bonNeck.quaternion.copy(bonNeck.userData.origQ);
+    _tmpQ.setFromEuler(new THREE.Euler(0, ph.hRY * 0.25, ph.nZ * 0.35, 'XYZ'));
+    bonNeck.quaternion.multiply(_tmpQ);
+  }
+  if (bonSpine2 && bonSpine2.userData.origQ) {
+    bonSpine2.quaternion.copy(bonSpine2.userData.origQ);
+    _tmpQ.setFromEuler(new THREE.Euler(ph.bRX * 0.4, 0, ph.bRZ * 0.5 + Math.sin(breathT)*.008, 'XYZ'));
+    bonSpine2.quaternion.multiply(_tmpQ);
+  }
 
-  // Shoulders: tiny wobble on hit, otherwise locked to bind pose
-  if (bonShL) {
-    bonShL.rotation.x = bonShL.userData.origRX;
-    bonShL.rotation.y = bonShL.userData.origRY;
-    bonShL.rotation.z = bonShL.userData.origRZ + ph.sRX * 0.06;
+  // Shoulders: locked to bind pose + tiny wobble around Z
+  if (bonShL && bonShL.userData.origQ) {
+    bonShL.quaternion.copy(bonShL.userData.origQ);
+    _wobbleQ.setFromAxisAngle(_shWobbleAxis, ph.sRX * 0.06);
+    bonShL.quaternion.multiply(_wobbleQ);
   }
-  if (bonShR) {
-    bonShR.rotation.x = bonShR.userData.origRX;
-    bonShR.rotation.y = bonShR.userData.origRY;
-    bonShR.rotation.z = bonShR.userData.origRZ + ph.sRX * -0.06;
+  if (bonShR && bonShR.userData.origQ) {
+    bonShR.quaternion.copy(bonShR.userData.origQ);
+    _wobbleQ.setFromAxisAngle(_shWobbleAxis, ph.sRX * -0.06);
+    bonShR.quaternion.multiply(_wobbleQ);
   }
-  // ALL arm/forearm/hand bones locked to bind pose — no drift whatsoever
+
+  // ALL arm/forearm/hand — strictly locked to bind pose quaternion
   Object.values(bonArmMap).forEach(b => {
-    b.rotation.x = b.userData.origRX;
-    b.rotation.y = b.userData.origRY;
-    b.rotation.z = b.userData.origRZ;
+    if (b.userData.origQ) b.quaternion.copy(b.userData.origQ);
   });
 }
 
@@ -701,6 +734,11 @@ function unlockAvaturn() {
       const banner = document.getElementById('switch-banner');
       banner.classList.add('show');
       setTimeout(() => banner.classList.remove('show'), 3000);
+      // Show size slider
+      document.getElementById('size-wrap').classList.add('visible');
+      // Apply current slider value to model
+      const sv = parseFloat(document.getElementById('size-slider').value);
+      model.scale.set(sv, sv, sv);
     }, 400);
   });
 }
@@ -753,6 +791,20 @@ canvas.addEventListener('touchstart', e => { e.preventDefault(); doSlap(e.touche
 
 // Prevent secret input clicks from firing slap
 secretInput.addEventListener('click', e => e.stopPropagation());
+
+// ── MODEL SIZE SLIDER ──────────────────────────────────────────────────────
+const sizeSlider = document.getElementById('size-slider');
+const sizeVal = document.getElementById('size-val');
+const sizeWrap = document.getElementById('size-wrap');
+
+sizeSlider.addEventListener('input', () => {
+  const s = parseFloat(sizeSlider.value);
+  sizeVal.textContent = s.toFixed(2) + '×';
+  if (activeModel && activeModel.userData.type === 'avaturn') {
+    activeModel.scale.set(s, s, s);
+  }
+});
+sizeSlider.addEventListener('click', e => e.stopPropagation());
 
 // ── PARTICLES ─────────────────────────────────────────────────────────────────
 function spawnParticles(x, y) {
